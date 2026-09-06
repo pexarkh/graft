@@ -10,6 +10,7 @@ import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Graft } from "./engine.js";
 import { resolveConfig, type EngineConfig } from "./ai/providers.js";
+import { formatUsage } from "./ai/llm/types.js";
 import type { ProviderKind } from "./ai/llm/factory.js";
 import { formatCheckReport } from "./context/check.js";
 import { formatGraphCheckReport } from "./graph/check.js";
@@ -531,6 +532,7 @@ program
     if (deep) {
       const m = g.meaning;
       console.log(`  meaning: ${m.computed} computed, ${m.cached} cached, ${m.stale} stale, ${m.pending} pending`);
+      console.log(`  ${formatUsage(engine.usage)}`);
     }
     console.log(`  → ${g.contextDir}`);
     // The activation event. Everything here is a bucket or a fixed label: repo
