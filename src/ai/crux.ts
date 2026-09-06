@@ -134,6 +134,18 @@ function userContent(input: FileCruxInput): string {
   return `FILE: ${input.path}\n\n${numberLines(input.source)}\n\nTARGETS (${n} — return all ${n}, one entry per id):\n${targets}`;
 }
 
+/**
+ * Some models (Qwen3-Coder via Bedrock, for one) echo the WHOLE target line as the
+ * id — `src/x.ts#f | function | lines L5-L10 | function f()` — instead of the bare
+ * id. Every entry then matches no target, and the file is reported as a miss even
+ * though the summaries were fine. The ` | ` separator is ours (see `userContent`)
+ * and never occurs inside an id, so keep only what precedes it; also drop a copied
+ * `id=` prefix.
+ */
+export function normalizeSymbolId(raw: string): string {
+  return raw.split(" | ")[0].trim().replace(/^id=/, "");
+}
+
 /** Normalize the tool's parsed argument object into a {@link NodeCrux} list. */
 function parseResults(obj: { symbols?: unknown } | undefined): NodeCrux[] {
   if (!obj || !Array.isArray(obj.symbols)) return [];
@@ -142,7 +154,7 @@ function parseResults(obj: { symbols?: unknown } | undefined): NodeCrux[] {
     .map((s) => s as Record<string, unknown>)
     .filter((s) => typeof s.id === "string")
     .map((s) => ({
-      id: s.id as string,
+      id: normalizeSymbolId(s.id as string),
       summary: typeof s.summary === "string" ? s.summary.trim() : "",
       crux_start: num(s.crux_start),
       crux_end: num(s.crux_end),

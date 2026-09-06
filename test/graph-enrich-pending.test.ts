@@ -159,3 +159,37 @@ test("#172: ChatCruxSummarizer recovers symbols when the gateway puts the tool p
   assert.equal(out[0].id, "src/calc.py#add");
   assert.equal(out[0].summary, "adds two numbers");
 });
+
+test("ChatCruxSummarizer maps an id echoed as the whole target line back to the bare id", async () => {
+  class EchoingIdModel implements ChatModel {
+    readonly label = "fake:echo-id";
+    async create(_req: ChatRequest): Promise<ChatResponse> {
+      // Qwen3-Coder on Bedrock copied everything after `id=` from the target line.
+      const args = {
+        symbols: [
+          { id: "src/calc.py | file | lines L1-L2", summary: "arithmetic helpers", crux_start: 0, crux_end: 0 },
+          { id: "id=src/calc.py#add | function | lines L1-L2 | def add(a, b)", summary: "adds two numbers", crux_start: 2, crux_end: 2 },
+        ],
+      };
+      return {
+        text: "",
+        toolCalls: [{ id: "c1", name: "record_symbols", args }],
+        usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+        stopReason: "tool_calls",
+        assistant: { role: "assistant", content: "" },
+      };
+    }
+  }
+  const crux = new ChatCruxSummarizer(new EchoingIdModel());
+  const out = await crux.describeFile({
+    path: "src/calc.py",
+    source: "def add(a, b):\n  return a + b\n",
+    nodes: [
+      { id: "src/calc.py", kind: "file", signature: null, startLine: 1, endLine: 2 },
+      { id: "src/calc.py#add", kind: "function", signature: "def add(a, b)", startLine: 1, endLine: 2 },
+    ],
+  });
+  assert.deepEqual(out.map((o) => o.id), ["src/calc.py", "src/calc.py#add"]);
+  assert.equal(out[1].summary, "adds two numbers");
+  assert.equal(crux.lastMiss, null);
+});
