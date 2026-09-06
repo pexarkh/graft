@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import OpenAI from "openai";
 import type Anthropic from "@anthropic-ai/sdk";
-import { OpenAIChatModel } from "../src/ai/llm/openai.js";
+import { OpenAIChatModel, closeOpenBrackets, parseToolArgs } from "../src/ai/llm/openai.js";
 import { emptyUsage, meter } from "../src/ai/llm/types.js";
 import { parseHeaderList, resolveConfig } from "../src/ai/providers.js";
 import { AnthropicChatModel } from "../src/ai/llm/anthropic.js";
@@ -309,4 +309,31 @@ test("GRAFT_LLM_HEADERS: parsed as name=value pairs and reaches every provider's
   }
   delete process.env.GRAFT_LLM_HEADERS;
   assert.equal(resolveConfig({ provider: "anthropic", apiKey: "k" }).headers, undefined);
+});
+
+test("openai: a tool call whose arguments lost the closing brace is repaired, not dropped", async () => {
+  const truncated = '{"symbols": [{"id": "viewer/tree.ts", "summary": "Renders a tree } with [brackets] in text", "crux_start": 18, "crux_end": 26}]';
+  assert.deepEqual(parseToolArgs(truncated), {
+    symbols: [{ id: "viewer/tree.ts", summary: "Renders a tree } with [brackets] in text", crux_start: 18, crux_end: 26 }],
+  });
+  assert.equal(closeOpenBrackets('{"a": [1, {"b": "x\\"y"'), '{"a": [1, {"b": "x\\"y"}]}');
+  assert.deepEqual(parseToolArgs(""), {});
+  assert.deepEqual(parseToolArgs("not json at all"), {});
+  const resp = openAiResp({
+    choices: [
+      {
+        message: { content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "record_symbols", arguments: truncated } }] },
+        finish_reason: "tool_calls",
+      },
+    ],
+  });
+  const { client } = fakeOpenAI(resp);
+  const m = new OpenAIChatModel({ apiKey: "x", model: "qwen-x", client });
+  const res = await m.create({
+    messages: [{ role: "user", content: "go" }],
+    tools: [{ name: "record_symbols", description: "d", parameters: { type: "object" } }],
+    responseFormat: { kind: "tool", name: "record_symbols" },
+  });
+  assert.equal(res.toolCalls.length, 1);
+  assert.equal((res.toolCalls[0].args as any).symbols[0].id, "viewer/tree.ts");
 });
