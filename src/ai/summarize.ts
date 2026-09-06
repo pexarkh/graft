@@ -1,4 +1,4 @@
-import type { ChatModel } from "./llm/types.js";
+import { envPositiveInt, type ChatModel } from "./llm/types.js";
 
 /**
  * Turns one source-code file into a short prose summary for the knowledge graph.
@@ -22,14 +22,17 @@ const SYSTEM_PROMPT = `You document source code for a team knowledge base. Given
 
 Write 3-8 sentences of flowing prose. Name concrete identifiers (modules, classes, services) so they can become graph entities. No code blocks, no line-by-line narration, no filler.`;
 
-/** Cap the code sent per file so a single giant file can't blow the context. */
-const MAX_CODE_CHARS = 24_000;
+/** Cap the code sent per file so a single giant file can't blow the context.
+ * Env: GRAFT_SUMMARY_MAX_CHARS — raise it when the model's context allows and
+ * the repo has files whose tail matters (a 130K-char router file is ~35K tokens). */
+export const DEFAULT_SUMMARY_MAX_CHARS = 24_000;
+export function summaryMaxChars(): number {
+  return envPositiveInt("GRAFT_SUMMARY_MAX_CHARS", DEFAULT_SUMMARY_MAX_CHARS);
+}
 
 function userContent(code: string, path: string): string {
-  const clipped =
-    code.length > MAX_CODE_CHARS
-      ? `${code.slice(0, MAX_CODE_CHARS)}\n… (truncated at ${MAX_CODE_CHARS} characters)`
-      : code;
+  const max = summaryMaxChars();
+  const clipped = code.length > max ? `${code.slice(0, max)}\n… (truncated at ${max} characters)` : code;
   return `File: ${path}\n\n${clipped}`;
 }
 

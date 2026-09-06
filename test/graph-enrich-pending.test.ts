@@ -9,7 +9,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { enrichGraph } from "../src/graph/enrich.js";
-import { ChatCruxSummarizer } from "../src/ai/crux.js";
+import { ChatCruxSummarizer, cruxWindows } from "../src/ai/crux.js";
+import { ChatSummarizer } from "../src/ai/summarize.js";
 import { formatGraphCheckReport, type GraphCheckResult } from "../src/graph/check.js";
 import type { CruxSummarizer, FileCruxInput, NodeCrux } from "../src/ai/crux.js";
 import type { ChatModel, ChatRequest, ChatResponse } from "../src/ai/llm/types.js";
@@ -192,4 +193,91 @@ test("ChatCruxSummarizer maps an id echoed as the whole target line back to the 
   assert.deepEqual(out.map((o) => o.id), ["src/calc.py", "src/calc.py#add"]);
   assert.equal(out[1].summary, "adds two numbers");
   assert.equal(crux.lastMiss, null);
+});
+
+/** 200 one-line functions plus the file node — the shape of a big router module. */
+function bigFile(): FileCruxInput {
+  const n = 200;
+  const source = Array.from({ length: n }, (_, i) => `def f${i}(): return ${i}`).join("\n");
+  const nodes: FileCruxInput["nodes"] = [{ id: "big.py", kind: "file", signature: null, startLine: 1, endLine: n }];
+  for (let i = 0; i < n; i++) nodes.push({ id: `big.py#f${i}`, kind: "function", signature: `def f${i}()`, startLine: i + 1, endLine: i + 1 });
+  return { path: "big.py", source, nodes };
+}
+
+/** Answers exactly the targets listed in the prompt it was shown, and keeps every prompt. */
+class WindowEchoModel implements ChatModel {
+  readonly label = "fake:window-echo";
+  prompts: string[] = [];
+  async create(req: ChatRequest): Promise<ChatResponse> {
+    const user = req.messages.find((m) => m.role === "user")!.content;
+    this.prompts.push(user);
+    const ids = [...user.matchAll(/^- id=(\S+) \|/gm)].map((m) => m[1]);
+    const args = { symbols: ids.map((id) => ({ id, summary: `about ${id}`, crux_start: 0, crux_end: 0 })) };
+    return {
+      text: "",
+      toolCalls: [{ id: "c", name: "record_symbols", args }],
+      usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+      stopReason: "tool_calls",
+      assistant: { role: "assistant", content: "" },
+    };
+  }
+}
+
+test("crux windows: ≤25 targets per call, each shown only its own lines, file node rides in the first window", async () => {
+  const input = bigFile();
+  const windows = cruxWindows(input, 25);
+  assert.equal(windows.length, 8);
+  assert.deepEqual(windows.map((w) => [w.startLine, w.endLine]).slice(0, 3), [[1, 25], [26, 50], [51, 75]]);
+  assert.equal(windows[0].nodes.length, 26, "file node + 25 symbols");
+  assert.equal(windows[0].nodes[0].id, "big.py");
+  const model = new WindowEchoModel();
+  const crux = new ChatCruxSummarizer(model);
+  const out = await crux.describeFile(input);
+  assert.equal(model.prompts.length, 8);
+  assert.equal(out.length, 201);
+  assert.deepEqual(new Set(out.map((o) => o.id)), new Set(input.nodes.map((n) => n.id)));
+  assert.equal(crux.lastMiss, null);
+  assert.match(model.prompts[1], /\(showing lines L26-L50 of 200\)/);
+  assert.match(model.prompts[1], /\n26\tdef f25\(\)/, "numbering stays file-absolute");
+  assert.doesNotMatch(model.prompts[1], /def f0\(\)/, "a window carries only its own lines");
+  assert.match(model.prompts[1], /TARGETS \(25 — return all 25/);
+});
+
+test("crux windows: GRAFT_CRUX_TARGETS_PER_CALL overrides the window size", () => {
+  const prev = process.env.GRAFT_CRUX_TARGETS_PER_CALL;
+  process.env.GRAFT_CRUX_TARGETS_PER_CALL = "100";
+  try {
+    assert.equal(cruxWindows(bigFile()).length, 2);
+  } finally {
+    if (prev === undefined) delete process.env.GRAFT_CRUX_TARGETS_PER_CALL;
+    else process.env.GRAFT_CRUX_TARGETS_PER_CALL = prev;
+  }
+  assert.equal(cruxWindows(bigFile()).length, 8);
+});
+
+test("summary cap: GRAFT_SUMMARY_MAX_CHARS controls where the file is cut", async () => {
+  let seen = "";
+  const model: ChatModel = {
+    label: "fake:capture",
+    async create(req) {
+      seen = req.messages.find((m) => m.role === "user")!.content;
+      return { text: "ok", toolCalls: [], usage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }, stopReason: "stop", assistant: { role: "assistant", content: "ok" } };
+    },
+  };
+  const code = "x".repeat(30_000);
+  const prev = process.env.GRAFT_SUMMARY_MAX_CHARS;
+  try {
+    delete process.env.GRAFT_SUMMARY_MAX_CHARS;
+    await new ChatSummarizer(model).summarize(code, { path: "big.py" });
+    assert.match(seen, /truncated at 24000 characters/);
+    process.env.GRAFT_SUMMARY_MAX_CHARS = "100000";
+    await new ChatSummarizer(model).summarize(code, { path: "big.py" });
+    assert.doesNotMatch(seen, /truncated/);
+    process.env.GRAFT_SUMMARY_MAX_CHARS = "100";
+    await new ChatSummarizer(model).summarize(code, { path: "big.py" });
+    assert.match(seen, /truncated at 100 characters/);
+  } finally {
+    if (prev === undefined) delete process.env.GRAFT_SUMMARY_MAX_CHARS;
+    else process.env.GRAFT_SUMMARY_MAX_CHARS = prev;
+  }
 });
