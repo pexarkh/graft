@@ -162,12 +162,14 @@ test("literal + glob workspace overlap collapses to the shallower literal entry"
   rmSync(d, { recursive: true, force: true });
 });
 
-test("discoverWorkspaceChildren finds immediate git children only", () => {
-  const d = fx({ "repoA/x.ts": "1", "repoB/y.py": "1", "plain/z.go": "1" });
+test("discoverWorkspaceChildren finds git children at any depth, pruned at each repo", () => {
+  const d = fx({ "repoA/x.ts": "1", "repoB/y.py": "1", "plain/z.go": "1", "ws/deep/repoC/w.ts": "1" });
   mkdirSync(join(d, "repoA/.git"), { recursive: true });
   mkdirSync(join(d, "repoB/.git"), { recursive: true });
-  mkdirSync(join(d, "repoB/vendored/.git"), { recursive: true }); // nested: not a child of d
-  assert.deepEqual(discoverWorkspaceChildren(d).sort(), ["repoA", "repoB"]);
+  mkdirSync(join(d, "repoB/vendored/.git"), { recursive: true }); // inside repoB: pruned, not a child of d
+  mkdirSync(join(d, "ws/deep/repoC/.git"), { recursive: true }); // two dirs down: a child
+  mkdirSync(join(d, "node_modules/pkg/.git"), { recursive: true }); // skip dir: never walked
+  assert.deepEqual(discoverWorkspaceChildren(d).sort(), ["repoA", "repoB", "ws/deep/repoC"]);
   rmSync(d, { recursive: true, force: true });
 });
 

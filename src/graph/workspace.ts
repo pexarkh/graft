@@ -27,7 +27,7 @@ import { contextDirFor } from "../context/node-file.js";
 import { checkGraph } from "./check.js";
 import { loadGraphCached } from "./load.js";
 import { buildRepoMap, formatRepoMap } from "./map.js";
-import { discoverWorkspaceChildren } from "./scopes.js";
+import { discoverWorkspaceChildren, pathUnderPrefix } from "./scopes.js";
 import {
   callersSavings,
   headerOf,
@@ -56,7 +56,7 @@ import { withSavings, type Savings } from "../context/savings.js";
  * never live at the parent — they live in each child's own `graft/`. */
 export interface WorkspaceV1 {
   version: 1;
-  /** Immediate child dir names that are git repos, sorted. */
+  /** Root-relative paths (any depth, posix separators) of child git repos, sorted. */
   children: string[];
 }
 
@@ -247,19 +247,21 @@ export function federateAsk(
   const limit = opts.limit ?? 8;
   const fileTopLock = opts.fileTopLock ?? true;
 
-  // `--in` scopes to a single child (and, past the first segment, a sub-scope
+  // `--in` scopes to a single child (and, past the child path, a sub-scope
   // within it). A prefix naming no known child at all is a caller mistake.
   let onlyChild: string | undefined;
   let childIn: string | undefined;
   if (opts.in) {
     const prefix = opts.in.replace(/\/+$/, "");
-    const [name, ...rest] = prefix.split("/");
     const allChildren = [...wg.loaded.map((l) => l.child), ...wg.missing].sort();
-    if (!allChildren.includes(name)) {
-      throw new Error(`no workspace repo "${name}" - repos: ${allChildren.join(", ")}`);
+    // Longest child that is a segment-prefix of `--in`: children can be nested
+    // paths (`a_wtr/repo`), so the first segment alone is not the repo name.
+    const name = allChildren.filter((c) => pathUnderPrefix(prefix, c)).sort((a, b) => b.length - a.length)[0];
+    if (!name) {
+      throw new Error(`no workspace repo "${prefix}" - repos: ${allChildren.join(", ")}`);
     }
     onlyChild = name;
-    childIn = rest.length ? rest.join("/") : undefined;
+    childIn = prefix.length > name.length ? prefix.slice(name.length + 1) : undefined;
   }
 
   // Pass 1: run each child's ask; keep its hits + RAW top-hit coverage.
