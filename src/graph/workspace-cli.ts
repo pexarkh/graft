@@ -9,6 +9,7 @@ import { Graft } from "../engine.js";
 import { contextDirFor, ensureGitignored } from "../context/node-file.js";
 import { patchBuildConfig, type BuildConfig } from "../util/state.js";
 import type { EngineConfig } from "../ai/providers.js";
+import { addUsage, emptyUsage, formatUsage } from "../ai/llm/types.js";
 import { formatAsk } from "../ask/ask.js";
 import type { Direction } from "./traverse.js";
 import {
@@ -46,6 +47,7 @@ export interface WorkspaceBuildOptions {
  * parent's `graft/` with `workspace.json`. Prints the one-time split warning
  * first when migrating away from a mega-graph. */
 export async function runWorkspaceBuild(root: string, opts: WorkspaceBuildOptions): Promise<void> {
+  const usage = emptyUsage();
   const buildChild = async (childDir: string, childName: string): Promise<void> => {
     // Persisted BEFORE the child build itself runs, same as the single-repo
     // path in cli.ts, so this build and every later no-flag child build agree.
@@ -66,6 +68,10 @@ export async function runWorkspaceBuild(root: string, opts: WorkspaceBuildOption
     if (opts.deep) await engine.init(childDir, { extensions: opts.extensions });
     const g = await engine.graph(childDir, { llm: opts.deep, concurrency: opts.concurrency });
     console.log(`✓ ${childName}/: ${g.nodes} nodes, ${g.edges} edges, ${g.cards} cards [${g.languages.join(", ")}]`);
+    if (opts.deep) {
+      console.log(`  ${formatUsage(engine.usage)}`);
+      addUsage(usage, engine.usage, engine.usage.calls);
+    }
     for (const e of g.errors) console.error(`✗ ${childName}/: ${e}`);
   };
 
@@ -82,6 +88,7 @@ export async function runWorkspaceBuild(root: string, opts: WorkspaceBuildOption
   // index (graft/workspace.json) is written outside buildGraph, so ignore it here too.
   ensureGitignored(root, contextDirFor(root, opts.override));
   console.log(`✓ workspace: ${children.length} repos federated → graft/workspace.json`);
+  if (opts.deep) console.log(`  ${formatUsage(usage)} across all repos`);
   console.log(`  graft/ is git-ignored — each teammate runs \`graft build\` to regenerate it locally.`);
 }
 

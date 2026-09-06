@@ -34,7 +34,7 @@ export interface ChatModelConfig {
 export function createChatModel(cfg: ChatModelConfig): ChatModel {
   switch (cfg.provider) {
     case "anthropic":
-      return new AnthropicChatModel({ apiKey: cfg.apiKey, model: cfg.model, baseUrl: cfg.baseUrl });
+      return new AnthropicChatModel({ apiKey: cfg.apiKey, model: cfg.model, baseUrl: cfg.baseUrl, headers: cfg.headers });
     case "openai":
       return new OpenAIChatModel({
         apiKey: cfg.apiKey,

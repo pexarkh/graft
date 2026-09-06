@@ -124,3 +124,41 @@ export function transportRetries(): number {
   const raw = Number(process.env.GRAFT_LLM_RETRIES);
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 4;
 }
+
+/** Running totals across every call a {@link meter}ed model made — the only
+ * place graft keeps what it spent, since neither provider's response is stored. */
+export interface UsageTotals extends Usage {
+  calls: number;
+}
+
+export function emptyUsage(): UsageTotals {
+  return { calls: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+}
+
+export function addUsage(into: UsageTotals, u: Usage, calls = 1): void {
+  into.calls += calls;
+  into.input += u.input;
+  into.output += u.output;
+  into.cacheRead += u.cacheRead;
+  into.cacheCreate += u.cacheCreate;
+}
+
+/** Wrap a model so each response's `usage` is added into `totals`. Same label,
+ * so the manifest is unaffected. */
+export function meter(model: ChatModel, totals: UsageTotals): ChatModel {
+  return {
+    label: model.label,
+    async create(req) {
+      const res = await model.create(req);
+      addUsage(totals, res.usage);
+      return res;
+    },
+  };
+}
+
+/** One line for the end of a `--deep` build, e.g.
+ * `llm usage: 531 calls, 1,984,443 input tokens (+12,000 cache read, 0 cache write), 410,915 output tokens`. */
+export function formatUsage(t: UsageTotals): string {
+  const n = (x: number) => x.toLocaleString("en-US");
+  return `llm usage: ${n(t.calls)} calls, ${n(t.input)} input tokens (+${n(t.cacheRead)} cache read, ${n(t.cacheCreate)} cache write), ${n(t.output)} output tokens`;
+}

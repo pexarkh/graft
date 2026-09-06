@@ -26,6 +26,10 @@ export interface EngineConfig {
   model?: string;
   /** Base URL for OpenAI-compatible endpoints. Env: GRAFT_BASE_URL. */
   baseUrl?: string;
+  /** Extra headers on every LLM call — a gateway's project/team tag (Bedrock's
+   * `anthropic-workspace-id`, OpenRouter's `X-Title`, …). Env: GRAFT_LLM_HEADERS
+   * as `name=value, name=value`. */
+  headers?: Record<string, string>;
 
   // --- advanced: bring your own components ---
   /** Override the whole transport (skips provider/apiKey/baseUrl). */
@@ -72,6 +76,19 @@ export const DEFAULTS = {
   model: DEFAULT_MODELS.openai,
 } as const;
 
+/** `name=value, name=value` → headers. Blank entries and entries without `=` are dropped. */
+export function parseHeaderList(raw: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of (raw ?? "").split(",")) {
+    const eq = part.indexOf("=");
+    if (eq <= 0) continue;
+    const name = part.slice(0, eq).trim();
+    const value = part.slice(eq + 1).trim();
+    if (name && value) out[name] = value;
+  }
+  return out;
+}
+
 /** Merge user config with environment variables and defaults. */
 export function resolveConfig(config: EngineConfig = {}): ResolvedConfig {
   const env = process.env;
@@ -96,10 +113,11 @@ export function resolveConfig(config: EngineConfig = {}): ResolvedConfig {
   // The orcarouter provider points at the gateway unless a base URL is given.
   if (!baseUrl && provider === "orcarouter") baseUrl = ORCAROUTER_BASE_URL;
 
-  const headers =
-    provider === "openai" && baseUrl?.includes("openrouter.ai")
-      ? { "X-Title": "graft" }
-      : undefined;
+  const merged = {
+    ...(provider === "openai" && baseUrl?.includes("openrouter.ai") ? { "X-Title": "graft" } : {}),
+    ...(config.headers ?? parseHeaderList(env.GRAFT_LLM_HEADERS)),
+  };
+  const headers = Object.keys(merged).length ? merged : undefined;
 
   return {
     contextDir: config.contextDir ?? env.GRAFT_DIR,

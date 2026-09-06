@@ -15,7 +15,7 @@ import { ChatSynthesizer, type Synthesizer } from "./ai/synthesize.js";
 import { ChatSummarizer, type Summarizer } from "./ai/summarize.js";
 import { ChatCruxSummarizer, type CruxSummarizer } from "./ai/crux.js";
 import { createChatModel } from "./ai/llm/factory.js";
-import type { ChatModel } from "./ai/llm/types.js";
+import { emptyUsage, meter, type ChatModel, type UsageTotals } from "./ai/llm/types.js";
 import { buildContext, CODE_EXTENSIONS, type BuildProgress, type BuildResult } from "./context/build.js";
 import { checkContext, type CheckResult } from "./context/check.js";
 import { buildGraph, type GraphBuildOptions, type GraphBuildResult } from "./graph/build.js";
@@ -54,6 +54,8 @@ export interface GraphRunOptions {
 
 export class Graft {
   private cfg: ResolvedConfig;
+  /** Tokens and calls spent through this engine so far (`build --deep` prints it). */
+  readonly usage: UsageTotals = emptyUsage();
 
   constructor(config: EngineConfig = {}) {
     this.cfg = resolveConfig(config);
@@ -120,21 +122,24 @@ export class Graft {
 
   /** The configured transport, or a clear error telling the user how to set a key. */
   private chatModel(): ChatModel {
-    if (this.cfg.chatModel) return this.cfg.chatModel;
     if (this._chatModel) return this._chatModel;
-    if (!this.cfg.apiKey) {
-      throw new Error(
-        "No API key. Set GRAFT_API_KEY (and GRAFT_PROVIDER / GRAFT_BASE_URL / GRAFT_MODEL " +
-          "for your provider) to build or summarize the graph.",
-      );
+    let model = this.cfg.chatModel;
+    if (!model) {
+      if (!this.cfg.apiKey) {
+        throw new Error(
+          "No API key. Set GRAFT_API_KEY (and GRAFT_PROVIDER / GRAFT_BASE_URL / GRAFT_MODEL " +
+            "for your provider) to build or summarize the graph.",
+        );
+      }
+      model = createChatModel({
+        provider: this.cfg.provider,
+        apiKey: this.cfg.apiKey,
+        model: this.cfg.model,
+        baseUrl: this.cfg.baseUrl,
+        headers: this.cfg.headers,
+      });
     }
-    this._chatModel = createChatModel({
-      provider: this.cfg.provider,
-      apiKey: this.cfg.apiKey,
-      model: this.cfg.model,
-      baseUrl: this.cfg.baseUrl,
-      headers: this.cfg.headers,
-    });
+    this._chatModel = meter(model, this.usage);
     return this._chatModel;
   }
 

@@ -9,6 +9,8 @@ import assert from "node:assert/strict";
 import OpenAI from "openai";
 import type Anthropic from "@anthropic-ai/sdk";
 import { OpenAIChatModel } from "../src/ai/llm/openai.js";
+import { emptyUsage, meter } from "../src/ai/llm/types.js";
+import { parseHeaderList, resolveConfig } from "../src/ai/providers.js";
 import { AnthropicChatModel } from "../src/ai/llm/anthropic.js";
 import type { ChatRequest } from "../src/ai/llm/types.js";
 
@@ -277,4 +279,34 @@ test("anthropic: json mode forces emit_json and returns serialized text", async 
   assert.deepEqual(box.params.tool_choice, { type: "tool", name: "emit_json" });
   assert.equal(res.text, '{"correct":true}');
   assert.equal(res.toolCalls.length, 0);
+});
+
+test("meter: sums every response's usage into the totals and keeps the label", async () => {
+  const usage = { input: 100, output: 10, cacheRead: 30, cacheCreate: 5 };
+  const stub = { label: "stub:m", create: async () => ({ text: "", toolCalls: [], usage, stopReason: null, assistant: { role: "assistant" as const, content: "" } }) };
+  const totals = emptyUsage();
+  const m = meter(stub, totals);
+  await m.create({ messages: [] });
+  await m.create({ messages: [] });
+  assert.equal(m.label, "stub:m");
+  assert.deepEqual(totals, { calls: 2, input: 200, output: 20, cacheRead: 60, cacheCreate: 10 });
+});
+
+test("GRAFT_LLM_HEADERS: parsed as name=value pairs and reaches every provider's headers", () => {
+  assert.deepEqual(parseHeaderList(" anthropic-workspace-id=proj_1 , X-Team = core,, bogus ,=novalue"), {
+    "anthropic-workspace-id": "proj_1",
+    "X-Team": "core",
+  });
+  assert.deepEqual(parseHeaderList(undefined), {});
+  const prev = process.env.GRAFT_LLM_HEADERS;
+  process.env.GRAFT_LLM_HEADERS = "anthropic-workspace-id=proj_1";
+  try {
+    assert.deepEqual(resolveConfig({ provider: "anthropic", apiKey: "k" }).headers, { "anthropic-workspace-id": "proj_1" });
+    assert.deepEqual(resolveConfig({ provider: "anthropic", apiKey: "k", headers: { "X-Team": "core" } }).headers, { "X-Team": "core" });
+  } finally {
+    if (prev === undefined) delete process.env.GRAFT_LLM_HEADERS;
+    else process.env.GRAFT_LLM_HEADERS = prev;
+  }
+  delete process.env.GRAFT_LLM_HEADERS;
+  assert.equal(resolveConfig({ provider: "anthropic", apiKey: "k" }).headers, undefined);
 });

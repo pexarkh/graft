@@ -27,6 +27,8 @@ export interface AnthropicChatModelOptions {
   model: string;
   baseUrl?: string;
   label?: string;
+  /** Extra default headers (e.g. a Bedrock mantle `anthropic-workspace-id` project tag). */
+  headers?: Record<string, string>;
   /** Inject a pre-built client (tests pass a stub; production omits it). */
   client?: Anthropic;
 }
@@ -44,7 +46,12 @@ export class AnthropicChatModel implements ChatModel {
     this.label = opts.label ?? `${PROVIDER}:${opts.model}`;
     this.client =
       opts.client ??
-      new Anthropic({ apiKey: opts.apiKey, baseURL: opts.baseUrl, maxRetries: transportRetries() });
+      new Anthropic({
+        apiKey: opts.apiKey,
+        baseURL: opts.baseUrl,
+        maxRetries: transportRetries(),
+        defaultHeaders: opts.headers,
+      });
   }
 
   async create(req: ChatRequest): Promise<ChatResponse> {
