@@ -130,6 +130,43 @@ function isRejectedToolsWithReasoning(err: unknown): boolean {
   );
 }
 
+/**
+ * Append the `]` / `}` a tool-call payload still has open. Qwen3-Coder (and other
+ * open-weight models) intermittently drop the final brace of an otherwise complete
+ * `arguments` string — `{"symbols": [{…}]` — which a strict parse rejects and the
+ * caller then reports as an unparseable reply. Tracks strings and escapes so a
+ * bracket inside a summary is not counted.
+ */
+export function closeOpenBrackets(s: string): string {
+  const open: string[] = [];
+  let inString = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inString) {
+      if (c === "\\") i++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === "{") open.push("}");
+    else if (c === "[") open.push("]");
+    else if (c === "}" || c === "]") open.pop();
+  }
+  return (inString ? s + '"' : s) + open.reverse().join("");
+}
+
+/** Parse tool-call arguments; an empty string is `{}`, and a payload missing only its
+ * closing brackets is repaired once before giving up with `{}`. */
+export function parseToolArgs(s: string): unknown {
+  try {
+    return JSON.parse(s || "{}");
+  } catch {
+    try {
+      return JSON.parse(closeOpenBrackets(s));
+    } catch {
+      return {};
+    }
+  }
+}
+
 export class OpenAIChatModel implements ChatModel {
   readonly label: string;
   private client: OpenAI;
@@ -229,13 +266,7 @@ export class OpenAIChatModel implements ChatModel {
       (c): c is OpenAI.Chat.Completions.ChatCompletionMessageToolCall & { type: "function" } =>
         c.type === "function",
     );
-    const parse = (s: string): unknown => {
-      try {
-        return JSON.parse(s || "{}");
-      } catch {
-        return {};
-      }
-    };
+    const parse = (s: string): unknown => parseToolArgs(s);
 
     let text = msg?.content ?? "";
     let toolCalls: ToolCall[] = rawCalls.map((c) => ({
