@@ -324,20 +324,30 @@ export function assertPrefixIndexed(graph: GraphV1, prefix: string): void {
   );
 }
 
-/** Immediate subdirs of `root` that are themselves git repos (have `.git`).
- * Used by workspace federation (Task 5). */
+/** Root-relative paths (posix separators) of every git repo under `root`, at any
+ * depth, pruned at the first `.git` so a repo's own nested clones stay its
+ * business (same boundary as `--follow-nested-repos`). Dot-dirs and SKIP_DIRS
+ * bound the walk via `shouldSkipDir`. Used by workspace federation (Task 5). */
 export function discoverWorkspaceChildren(root: string): string[] {
   const absRoot = resolve(root);
   const includes = readIncludeDirs(absRoot);
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(absRoot, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return entries
-    .filter((e) => e.isDirectory() && !shouldSkipDir(e.name, includes) && existsSync(join(absRoot, e.name, ".git")))
-    .map((e) => e.name);
+  const out: string[] = [];
+  const walk = (rel: string): void => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(join(absRoot, rel), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (!e.isDirectory() || shouldSkipDir(e.name, includes)) continue;
+      const child = rel ? `${rel}/${e.name}` : e.name;
+      if (existsSync(join(absRoot, child, ".git"))) out.push(child);
+      else walk(child);
+    }
+  };
+  walk("");
+  return out;
 }
 
 /** Every consumer's entry point to a graph's scopes: absent `meta.scopes` (old
