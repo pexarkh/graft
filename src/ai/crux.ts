@@ -14,7 +14,7 @@
  * sees each symbol's neighbours, which sharpens the summaries. Line numbers are
  * consumed once, at write time, to slice the crux text verbatim from source.
  */
-import type { ChatModel, ChatResponse } from "./llm/types.js";
+import { envPositiveInt, type ChatModel, type ChatResponse } from "./llm/types.js";
 import { recoverToolArgsFromContent, warnToolChoiceIgnored } from "./llm/recover-tool.js";
 import type { Kind } from "../graph/types.js";
 
@@ -110,28 +110,75 @@ const SYMBOLS_SCHEMA = {
   required: ["symbols"],
 } as const;
 
-/** Cap the file text sent per request so one huge file can't blow the context. */
-const MAX_CODE_CHARS = 18_000;
-
-function numberLines(source: string): string {
-  const clipped =
-    source.length > MAX_CODE_CHARS ? `${source.slice(0, MAX_CODE_CHARS)}\n… (truncated)` : source;
-  return clipped
-    .split("\n")
-    .map((line, i) => `${i + 1}\t${line}`)
-    .join("\n");
+/** Cap on the code sent per request. With windowing (below) it only bites when
+ * one window — a single giant symbol — exceeds it. Env: GRAFT_CRUX_MAX_CHARS. */
+export const DEFAULT_CRUX_MAX_CHARS = 18_000;
+export function cruxMaxChars(): number {
+  return envPositiveInt("GRAFT_CRUX_MAX_CHARS", DEFAULT_CRUX_MAX_CHARS);
 }
 
-function userContent(input: FileCruxInput): string {
-  const targets = input.nodes
+/** Targets described per request. Bounds the reply so a 120-symbol file cannot
+ * overrun the output budget, and bounds the input to the lines those targets
+ * cover. Env: GRAFT_CRUX_TARGETS_PER_CALL. */
+export const DEFAULT_TARGETS_PER_CALL = 25;
+export function targetsPerCall(): number {
+  return envPositiveInt("GRAFT_CRUX_TARGETS_PER_CALL", DEFAULT_TARGETS_PER_CALL);
+}
+
+/** One request's worth of a file: which targets, and the file-absolute line range shown. */
+export interface CruxWindow {
+  nodes: NodeRef[];
+  startLine: number;
+  endLine: number;
+}
+
+/**
+ * Split a file's targets into windows of ≤ `perCall`, ordered by start line, each
+ * carrying only the lines that cover its symbols. Before this, one request sent the
+ * first 18K chars and asked about EVERY symbol — on a 2,600-line file ~100 targets
+ * pointed at code the model could not see. Line numbers stay file-absolute, so the
+ * prompt's rules and the returned crux spans need no translation. A file-level node
+ * spans the whole file; it rides in the first window, which is extended to start at
+ * line 1 so the module head (imports, constants) is in view for it.
+ */
+export function cruxWindows(input: FileCruxInput, perCall = targetsPerCall()): CruxWindow[] {
+  const lastLine = input.source.split("\n").length;
+  const files = input.nodes.filter((n) => n.kind === "file");
+  const syms = input.nodes.filter((n) => n.kind !== "file").sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
+  const windows: CruxWindow[] = [];
+  const groups = Math.max(1, Math.ceil(syms.length / perCall));
+  for (let i = 0; i < groups; i++) {
+    const group = syms.slice(i * perCall, (i + 1) * perCall);
+    const nodes = i === 0 ? [...files, ...group] : group;
+    if (nodes.length === 0) continue;
+    let startLine = group.length ? Math.max(1, Math.min(...group.map((n) => n.startLine))) : 1;
+    const endLine = group.length ? Math.min(lastLine, Math.max(...group.map((n) => n.endLine))) : lastLine;
+    if (i === 0 && files.length) startLine = 1;
+    windows.push({ nodes, startLine, endLine: Math.max(startLine, endLine) });
+  }
+  return windows;
+}
+
+function numberLines(lines: string[], fromLine: number): string {
+  const max = cruxMaxChars();
+  let text = lines.map((line, i) => `${fromLine + i}\t${line}`).join("\n");
+  if (text.length > max) text = `${text.slice(0, max)}\n… (truncated)`;
+  return text;
+}
+
+function userContent(path: string, lines: string[], w: CruxWindow): string {
+  const targets = w.nodes
     .map(
       (n) =>
         `- id=${n.id} | ${n.kind} | lines L${n.startLine}-L${n.endLine}` +
         (n.signature ? ` | ${n.signature}` : ""),
     )
     .join("\n");
-  const n = input.nodes.length;
-  return `FILE: ${input.path}\n\n${numberLines(input.source)}\n\nTARGETS (${n} — return all ${n}, one entry per id):\n${targets}`;
+  const n = w.nodes.length;
+  const partial = w.startLine > 1 || w.endLine < lines.length;
+  const shown = partial ? ` (showing lines L${w.startLine}-L${w.endLine} of ${lines.length})` : "";
+  const body = numberLines(lines.slice(w.startLine - 1, w.endLine), w.startLine);
+  return `FILE: ${path}${shown}\n\n${body}\n\nTARGETS (${n} — return all ${n}, one entry per id):\n${targets}`;
 }
 
 /**
@@ -189,27 +236,34 @@ export class ChatCruxSummarizer implements CruxSummarizer {
 
   constructor(private model: ChatModel) {}
 
+  /** One request per window (see {@link cruxWindows}); results are concatenated and
+   * `lastMiss` records the first window that produced nothing usable. */
   async describeFile(input: FileCruxInput): Promise<NodeCrux[]> {
     this.lastMiss = null;
     if (input.nodes.length === 0) return [];
-    const res = await this.model.create({
-      temperature: 0,
-      maxTokens: 8192,
-      tools: [
-        {
-          name: RECORD_TOOL,
-          description: "Record each target definition's purpose and crux line range.",
-          parameters: SYMBOLS_SCHEMA as unknown as Record<string, unknown>,
-        },
-      ],
-      responseFormat: { kind: "tool", name: RECORD_TOOL },
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userContent(input) },
-      ],
-    });
-    const parsed = parseResults(argsFromResponse(res));
-    this.lastMiss = classifyCruxMiss(res, parsed);
-    return parsed;
+    const lines = input.source.split("\n");
+    const out: NodeCrux[] = [];
+    for (const w of cruxWindows(input)) {
+      const res = await this.model.create({
+        temperature: 0,
+        maxTokens: 8192,
+        tools: [
+          {
+            name: RECORD_TOOL,
+            description: "Record each target definition's purpose and crux line range.",
+            parameters: SYMBOLS_SCHEMA as unknown as Record<string, unknown>,
+          },
+        ],
+        responseFormat: { kind: "tool", name: RECORD_TOOL },
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userContent(input.path, lines, w) },
+        ],
+      });
+      const parsed = parseResults(argsFromResponse(res));
+      this.lastMiss ??= classifyCruxMiss(res, parsed);
+      out.push(...parsed);
+    }
+    return out;
   }
 }

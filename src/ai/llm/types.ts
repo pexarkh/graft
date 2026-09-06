@@ -125,6 +125,12 @@ export function transportRetries(): number {
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 4;
 }
 
+/** A positive-integer env knob with a default: unset, non-numeric or ≤0 → `fallback`. */
+export function envPositiveInt(name: string, fallback: number): number {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+}
+
 /** Running totals across every call a {@link meter}ed model made — the only
  * place graft keeps what it spent, since neither provider's response is stored. */
 export interface UsageTotals extends Usage {
