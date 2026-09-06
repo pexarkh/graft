@@ -5,7 +5,7 @@ dist/
 # graft's local graph cache — regenerable, not committed. Each dev runs
 # `graft build` locally (it re-adds this line itself), so the folder is a
 # personal cache like node_modules, never a shared artifact.
-graft/
+graft*/
 
 # Env
 .env
@@ -28,3 +28,5 @@ transcripts/
 
 # graft's local repository settings — not committed.
 /.graft/
+
+bedrock.project.id
