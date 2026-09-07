@@ -10,7 +10,8 @@ import OpenAI from "openai";
 import type Anthropic from "@anthropic-ai/sdk";
 import { OpenAIChatModel, closeOpenBrackets, parseToolArgs } from "../src/ai/llm/openai.js";
 import { emptyUsage, meter } from "../src/ai/llm/types.js";
-import { parseHeaderList, resolveConfig } from "../src/ai/providers.js";
+import { hasPassOverrides, parseHeaderList, resolveConfig } from "../src/ai/providers.js";
+import { Graft } from "../src/engine.js";
 import { AnthropicChatModel } from "../src/ai/llm/anthropic.js";
 import type { ChatRequest } from "../src/ai/llm/types.js";
 
@@ -336,4 +337,56 @@ test("openai: a tool call whose arguments lost the closing brace is repaired, no
   });
   assert.equal(res.toolCalls.length, 1);
   assert.equal((res.toolCalls[0].args as any).symbols[0].id, "viewer/tree.ts");
+});
+
+function withEnv<T>(vars: Record<string, string | undefined>, fn: () => T): T {
+  const prev: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(vars)) {
+    prev[k] = process.env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+test("per-pass env: GRAFT_SYNTH_* overrides only the synth pass, each setting falling back on its own", () => {
+  withEnv(
+    {
+      GRAFT_PROVIDER: "openai", GRAFT_MODEL: "qwen.x", GRAFT_BASE_URL: "https://m/v1", GRAFT_API_KEY: "k", GRAFT_LLM_HEADERS: "OpenAI-Project=p1",
+      GRAFT_SYNTH_PROVIDER: "anthropic", GRAFT_SYNTH_MODEL: "anthropic.claude-sonnet-5", GRAFT_SYNTH_BASE_URL: "https://m/anthropic", GRAFT_SYNTH_LLM_HEADERS: "anthropic-workspace-id=p1",
+      GRAFT_SYNTH_API_KEY: undefined, GRAFT_CRUX_MODEL: undefined, GRAFT_SUMMARY_MODEL: undefined,
+    },
+    () => {
+      const synth = resolveConfig({}, "synth");
+      assert.equal(synth.provider, "anthropic");
+      assert.equal(synth.model, "anthropic.claude-sonnet-5");
+      assert.equal(synth.baseUrl, "https://m/anthropic");
+      assert.deepEqual(synth.headers, { "anthropic-workspace-id": "p1" });
+      assert.equal(synth.apiKey, "k", "API key falls back to the global one");
+      for (const pass of ["summary", "crux"] as const) {
+        const c = resolveConfig({}, pass);
+        assert.equal(c.provider, "openai"); assert.equal(c.model, "qwen.x"); assert.deepEqual(c.headers, { "OpenAI-Project": "p1" });
+      }
+      assert.equal(resolveConfig({ model: "cli-flag" }, "crux").model, "cli-flag", "a CLI flag still beats the global env");
+      assert.equal(resolveConfig({ model: "cli-flag" }, "synth").model, "anthropic.claude-sonnet-5", "a pass variable beats a CLI flag");
+      assert.equal(hasPassOverrides("synth"), true); assert.equal(hasPassOverrides("crux"), false);
+      const g = new Graft({});
+      assert.deepEqual(g.passLabels(), { summary: "openai:qwen.x", synth: "anthropic:anthropic.claude-sonnet-5", crux: "openai:qwen.x" });
+      assert.equal((g as any).modelLabel(), "summary=openai:qwen.x; synth=anthropic:anthropic.claude-sonnet-5; crux=openai:qwen.x");
+      // distinct clients, one shared usage total
+      assert.notEqual((g as any).chatModelFor("synth"), (g as any).chatModelFor("crux"));
+      assert.equal((g as any).chatModelFor("summary"), (g as any).chatModelFor("crux"), "passes without overrides share the client");
+    },
+  );
+  withEnv({ GRAFT_SYNTH_PROVIDER: undefined, GRAFT_SYNTH_MODEL: undefined, GRAFT_SYNTH_BASE_URL: undefined, GRAFT_SYNTH_LLM_HEADERS: undefined, GRAFT_PROVIDER: "anthropic", GRAFT_MODEL: "m", GRAFT_API_KEY: "k" }, () => {
+    const g = new Graft({});
+    assert.equal((g as any).modelLabel(), "anthropic:m", "no overrides → the single label as before");
+  });
 });
