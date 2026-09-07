@@ -19,6 +19,7 @@ import {
   federateGrep,
   isWorkspaceBuildRoot,
   orderChildrenForBuild,
+  filterChildren,
 } from "../src/graph/workspace.js";
 import { formatAsk } from "../src/ask/ask.js";
 import type { GraphV1 } from "../src/graph/types.js";
@@ -559,5 +560,35 @@ test("build order: main checkouts before linked worktrees, so a worktree can see
   const { children } = await splitWorkspace(parent, undefined, async (_dir, name) => { built.push(name); });
   assert.deepEqual(built, ["app_wtr/release_git", "lib_wtr/zeta_git", "app_wtr/feature--feat", "app_wtr/feature--fix", "lib_wtr/alpha-branch"]);
   assert.deepEqual(readWorkspace(parent)!.children, [...children].sort());
+  rmSync(parent, { recursive: true, force: true });
+});
+
+test("--only-dir at a workspace root: builds only the matching repos and persists the filter", async () => {
+  const parent = workspaceFx({
+    "repoA": { "a.ts": "export const a = 1;\n" },
+    "grp_wtr/main_git": { "m.ts": "export const m = 1;\n" },
+    "grp_wtr/branch": { "b.ts": "export const b = 1;\n" },
+    "other": { "o.ts": "export const o = 1;\n" },
+  });
+  const all = ["grp_wtr/branch", "grp_wtr/main_git", "other", "repoA"];
+  assert.deepEqual(filterChildren(all, ["grp_wtr", "repoA"]).sort(), ["grp_wtr/branch", "grp_wtr/main_git", "repoA"]);
+  assert.deepEqual(filterChildren(all, ["grp_wtr/main_git"]), ["grp_wtr/main_git"]);
+  assert.deepEqual(filterChildren(all, undefined), all, "no filter keeps everything");
+  assert.throws(() => filterChildren(all, ["nope"]), /matched no workspace repo/);
+  const built: string[] = [];
+  const first = await splitWorkspace(parent, undefined, async (_d, name) => { built.push(name); }, undefined, ["grp_wtr", "repoA"]);
+  assert.deepEqual([...first.children].sort(), ["grp_wtr/branch", "grp_wtr/main_git", "repoA"]);
+  assert.ok(!built.includes("other"), "the excluded repo was never built");
+  const ws = readWorkspace(parent)!;
+  assert.deepEqual(ws.children, ["grp_wtr/branch", "grp_wtr/main_git", "repoA"]);
+  assert.deepEqual(ws.only, ["grp_wtr", "repoA"]);
+  // A later plain build (no flag) keeps the persisted set instead of rediscovering `other`.
+  built.length = 0;
+  await splitWorkspace(parent, undefined, async (_d, name) => { built.push(name); });
+  assert.deepEqual([...built].sort(), ["grp_wtr/branch", "grp_wtr/main_git", "repoA"]);
+  // An explicit new flag replaces it.
+  const widened = await splitWorkspace(parent, undefined, async () => {}, undefined, ["other"]);
+  assert.deepEqual(widened.children, ["other"]);
+  assert.deepEqual(readWorkspace(parent)!.only, ["other"]);
   rmSync(parent, { recursive: true, force: true });
 });

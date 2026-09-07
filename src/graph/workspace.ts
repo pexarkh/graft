@@ -58,6 +58,10 @@ export interface WorkspaceV1 {
   version: 1;
   /** Root-relative paths (any depth, posix separators) of child git repos, sorted. */
   children: string[];
+  /** `--only-dir` prefixes the build was narrowed to, when it was. Persisted so a
+   * later plain `graft build` here rebuilds the same set instead of silently
+   * discovering (and paying for) every other repo in the folder. */
+  only?: string[];
 }
 
 const WORKSPACE_FILE = "workspace.json";
@@ -74,7 +78,8 @@ export function readWorkspace(root: string, override?: string): WorkspaceV1 | nu
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<WorkspaceV1>;
     if (parsed.version !== 1 || !Array.isArray(parsed.children)) return null;
-    return { version: 1, children: parsed.children.map(String) };
+    const only = Array.isArray(parsed.only) ? parsed.only.map(String) : undefined;
+    return { version: 1, children: parsed.children.map(String), ...(only?.length ? { only } : {}) };
   } catch {
     return null;
   }
@@ -85,7 +90,7 @@ export function writeWorkspace(root: string, ws: WorkspaceV1, override?: string)
   const dir = contextDirFor(root, override);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, WORKSPACE_FILE);
-  const sorted: WorkspaceV1 = { version: 1, children: [...ws.children].sort() };
+  const sorted: WorkspaceV1 = { version: 1, children: [...ws.children].sort(), ...(ws.only?.length ? { only: [...ws.only].sort() } : {}) };
   writeFileSync(path, JSON.stringify(sorted, null, 2) + "\n");
   return path;
 }
@@ -724,18 +729,33 @@ export function orderChildrenForBuild(root: string, children: readonly string[])
   return [...children].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
+/** Narrow discovered children to those at or under an `--only-dir` prefix
+ * (`a_wtr` keeps every repo inside it; `a_wtr/main_git` keeps one). Throws when
+ * nothing matches: a typo must not silently build zero repos. */
+export function filterChildren(children: readonly string[], only: readonly string[] | undefined): string[] {
+  if (!only?.length) return [...children];
+  const kept = children.filter((c) => only.some((p) => pathUnderPrefix(c, p)));
+  if (kept.length === 0) {
+    throw new Error(`--only-dir matched no workspace repo (${only.join(", ")}) — repos: ${children.join(", ")}`);
+  }
+  return kept;
+}
+
 export async function splitWorkspace(
   root: string,
   override: string | undefined,
   buildChild: (childDir: string, childName: string) => Promise<void>,
   onStart?: (info: { children: string[]; migrated: boolean }) => void,
+  only?: string[],
 ): Promise<{ children: string[]; migrated: boolean }> {
-  const children = orderChildrenForBuild(root, discoverWorkspaceChildren(root));
+  // An explicit --only-dir wins; otherwise the filter a previous build persisted.
+  const filter = only?.length ? only : readWorkspace(root, override)?.only;
+  const children = orderChildrenForBuild(root, filterChildren(discoverWorkspaceChildren(root), filter));
   const migrated = hasMegaGraph(root, override);
   onStart?.({ children, migrated });
   for (const child of children) await buildChild(join(root, child), child);
   clearParentGraft(root, override); // drop the mega-graph/.cache/cards…
-  writeWorkspace(root, { version: 1, children }, override); // …leaving ONLY workspace.json
+  writeWorkspace(root, { version: 1, children, ...(filter?.length ? { only: filter } : {}) }, override); // …leaving ONLY workspace.json
   return { children, migrated };
 }
 
