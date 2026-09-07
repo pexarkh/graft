@@ -4,10 +4,15 @@ import type { GraphV1 } from '../graph/types.js';
 import type { Stats } from './state.js';
 import { resolveContextDir } from '../util/state.js';
 
-export function readWiring(projectDir: string): GraphV1 | null {
+/** The graph under an explicit context dir (`<contextDir>/.graph/wiring.json`), or null when absent. */
+export function readWiringAt(contextDir: string): GraphV1 | null {
   try {
-    return JSON.parse(readFileSync(join(resolveContextDir(projectDir), '.graph', 'wiring.json'), 'utf8')) as GraphV1;
+    return JSON.parse(readFileSync(join(contextDir, '.graph', 'wiring.json'), 'utf8')) as GraphV1;
   } catch { return null; }
+}
+
+export function readWiring(projectDir: string): GraphV1 | null {
+  return readWiringAt(resolveContextDir(projectDir));
 }
 
 export function computeStats(

@@ -69,3 +69,38 @@ test('a 0-node cache without wiring.json is still not built', () => {
   assert.match(line, /not built/);
   assert.match(line, /graft build/);
 });
+
+function writeWorkspace(dir: string, children: string[]): void {
+  mkdirSync(join(dir, 'graft'), { recursive: true });
+  writeFileSync(join(dir, 'graft', 'workspace.json'), JSON.stringify({ version: 1, children }));
+}
+
+test('a workspace parent sums its built children instead of reading as "not built"', () => {
+  const d = repo();
+  writeWorkspace(d, ['a', 'b', 'c']);
+  writeWiring(join(d, 'a'), {
+    meta: { nodeCount: 10, edgeCount: 20, languages: ['python'] },
+    nodes: [{ id: 'x', summary_state: 'ready' }],
+    edges: [],
+  });
+  writeWiring(join(d, 'b'), {
+    meta: { nodeCount: 5, edgeCount: 7, languages: ['go', 'python'] },
+    nodes: [{ id: 'y', summary_state: 'pending' }, { id: 'z', summary_state: 'ready' }],
+    edges: [],
+  });
+  const s = resolveStats(d)!;
+  assert.equal(s.nodeCount, 15, 'nodes live in the children — the parent has no wiring.json; unbuilt child c is skipped');
+  assert.equal(s.edgeCount, 27);
+  assert.equal(s.totalCount, 3);
+  assert.equal(s.readyCount, 2);
+  assert.deepEqual(s.languages, ['go', 'python']);
+  const line = strip(renderStatusline(s, null, { ctxPct: null })[0]);
+  assert.doesNotMatch(line, /not built/);
+  assert.match(line, /15 nodes \/ 27 edges/);
+});
+
+test('a workspace whose children are all unbuilt is still not built', () => {
+  const d = repo();
+  writeWorkspace(d, ['a', 'b']);
+  assert.equal(resolveStats(d), null, '"run graft build" is the right hint here: it builds the children');
+});
