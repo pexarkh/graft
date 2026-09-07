@@ -21,7 +21,7 @@
  * CLI print/exit wrappers and the per-child build orchestration live in
  * `workspace-cli.ts`; `mcp/tools.ts` calls the federate* functions directly.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { contextDirFor } from "../context/node-file.js";
 import { checkGraph } from "./check.js";
@@ -708,13 +708,29 @@ export function federateCallers(
  * building that child standalone (`buildChild` is just `buildGraph(childDir)`),
  * because nothing about the parent path enters the child's build.
  */
+/** Build order: main checkouts (`.git` is a directory) before linked worktrees
+ * (`.git` is a file), lexicographic within each group. A worktree seeds its graph
+ * from its main checkout only if that checkout is already built (see `seed.ts`);
+ * plain lexicographic order built `<user>--*` worktrees before `<repo>_git` and
+ * paid a full build for each one instead of just the lines that differ. */
+export function orderChildrenForBuild(root: string, children: readonly string[]): string[] {
+  const rank = (child: string): number => {
+    try {
+      return statSync(join(root, child, ".git")).isDirectory() ? 0 : 1;
+    } catch {
+      return 1;
+    }
+  };
+  return [...children].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
 export async function splitWorkspace(
   root: string,
   override: string | undefined,
   buildChild: (childDir: string, childName: string) => Promise<void>,
   onStart?: (info: { children: string[]; migrated: boolean }) => void,
 ): Promise<{ children: string[]; migrated: boolean }> {
-  const children = discoverWorkspaceChildren(root).slice().sort();
+  const children = orderChildrenForBuild(root, discoverWorkspaceChildren(root));
   const migrated = hasMegaGraph(root, override);
   onStart?.({ children, migrated });
   for (const child of children) await buildChild(join(root, child), child);
