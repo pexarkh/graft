@@ -10,7 +10,7 @@ import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Graft } from "./engine.js";
 import { resolveConfig, type EngineConfig } from "./ai/providers.js";
-import { formatUsage } from "./ai/llm/types.js";
+import { formatUsage, formatUsageByModel } from "./ai/llm/types.js";
 import type { ProviderKind } from "./ai/llm/factory.js";
 import { formatCheckReport } from "./context/check.js";
 import { formatGraphCheckReport } from "./graph/check.js";
@@ -537,6 +537,7 @@ program
       const m = g.meaning;
       console.log(`  meaning: ${m.computed} computed, ${m.cached} cached, ${m.stale} stale, ${m.pending} pending`);
       console.log(`  ${formatUsage(engine.usage)}`);
+      for (const line of formatUsageByModel(engine.usageByModel)) console.log(line);
       const labels = engine.passLabels();
       if (new Set(Object.values(labels)).size > 1)
         console.log(`  models: summary=${labels.summary}, synth=${labels.synth}, crux=${labels.crux}`);
