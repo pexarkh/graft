@@ -18,6 +18,7 @@ import {
   federateCallers,
   federateGrep,
   isWorkspaceBuildRoot,
+  orderChildrenForBuild,
 } from "../src/graph/workspace.js";
 import { formatAsk } from "../src/ask/ask.js";
 import type { GraphV1 } from "../src/graph/types.js";
@@ -532,4 +533,31 @@ test("readWorkspace: rejects foreign/invalid json as not-a-workspace", () => {
   writeWorkspace(p, { version: 1, children: ["x", "a"] });
   assert.deepEqual(readWorkspace(p), { version: 1, children: ["a", "x"] });
   rmSync(p, { recursive: true, force: true });
+});
+
+test("build order: main checkouts before linked worktrees, so a worktree can seed from its main", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "ws-order-"));
+  // Two `_wtr` folders, each with a main checkout (.git dir) whose name sorts AFTER its worktrees (.git file).
+  mkdirSync(join(parent, "app_wtr", "release_git", ".git"), { recursive: true });
+  for (const wt of ["feature--fix", "feature--feat"]) {
+    mkdirSync(join(parent, "app_wtr", wt), { recursive: true });
+    writeFileSync(join(parent, "app_wtr", wt, ".git"), "gitdir: ../release_git/.git/worktrees/x\n");
+  }
+  mkdirSync(join(parent, "lib_wtr", "zeta_git", ".git"), { recursive: true });
+  mkdirSync(join(parent, "lib_wtr", "alpha-branch"), { recursive: true });
+  writeFileSync(join(parent, "lib_wtr", "alpha-branch", ".git"), "gitdir: ../zeta_git/.git/worktrees/y\n");
+  const discovered = ["app_wtr/feature--feat", "app_wtr/feature--fix", "app_wtr/release_git", "lib_wtr/alpha-branch", "lib_wtr/zeta_git"];
+  assert.deepEqual(orderChildrenForBuild(parent, discovered), [
+    "app_wtr/release_git",
+    "lib_wtr/zeta_git",
+    "app_wtr/feature--feat",
+    "app_wtr/feature--fix",
+    "lib_wtr/alpha-branch",
+  ]);
+  // splitWorkspace builds in that order but still writes workspace.json sorted.
+  const built: string[] = [];
+  const { children } = await splitWorkspace(parent, undefined, async (_dir, name) => { built.push(name); });
+  assert.deepEqual(built, ["app_wtr/release_git", "lib_wtr/zeta_git", "app_wtr/feature--feat", "app_wtr/feature--fix", "lib_wtr/alpha-branch"]);
+  assert.deepEqual(readWorkspace(parent)!.children, [...children].sort());
+  rmSync(parent, { recursive: true, force: true });
 });
