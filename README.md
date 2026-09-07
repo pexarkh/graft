@@ -472,7 +472,10 @@ Graft supports these layouts:
 - **A git repo with other repos cloned inside it** (no gitlink, no index entry) — the shape multi-repo manifest tools like `west`, `repo`, `gclient` and `tsrc` check dependencies out into, and the shape you get by cloning an upstream into the tree to patch it locally. `--follow-submodules` cannot reach these: they have no `160000` index entry to follow. Run `graft build --follow-nested-repos` to fold them into one graph, prefixing child paths (for example, `external/parser/src/index.ts`) while honoring each clone's own Git ignore rules. A clone at a git-ignored path stays absent, since Git never reports it. The choice is saved in `.graft/config.json` and is independent of `--follow-submodules` — neither flag implies the other. Run `graft build --no-follow-nested-repos` to restore and persist the default boundary. Prefer this over the multi-repo split below when the nested repos import from each other and you want those edges in one graph; prefer the split when you want each repo scored and refreshed on its own.
 - **A folder of separate git repos** (no `.git` at the top) — `graft build`
   auto-splits: each child gets its own (git-ignored) `graft/`, and the parent
-  gets a `graft/workspace.json` index. Queries from the parent federate across
+  gets a `graft/workspace.json` index. To index only some of the repos, run
+  `graft build --only-dir <child> --only-dir <folder-of-children> …` at the
+  parent: the set is recorded in `workspace.json`, so later plain builds,
+  queries and `graft init` there stay on it. Queries from the parent federate across
   every child, always labeled `<child>/`. Run `graft build` inside a child to
   work on just that repo.
 

@@ -361,7 +361,9 @@ program
     "--only-dir <path>",
     "only index files under this repo-relative path — repeatable; the wiring walk and the --deep " +
       "concept pass both honor it. Recorded in the graph fingerprint so a later build " +
-      "(and the hooks/refresh path) walks the same set; everything outside the list is skipped",
+      "(and the hooks/refresh path) walks the same set; everything outside the list is skipped. " +
+      "At a multi-repo workspace root: build only the child repos at or under these prefixes " +
+      "(persisted in graft/workspace.json)",
     (val: string, prev: string[]) => [...prev, val],
     [] as string[],
   )
@@ -481,6 +483,7 @@ program
         includeDirs: opts.includeDir,
         followSubmodules: followSubmodulesWasExplicit ? opts.followSubmodules : undefined,
         followNestedRepos: followNestedReposWasExplicit ? opts.followNestedRepos : undefined,
+        onlyDirs,
       });
       return;
     }
@@ -1027,8 +1030,9 @@ program
     // opens at a repo root, not at the parent, and reads `.claude/` from there —
     // wiring only the parent leaves each child with no skill, hooks, or MCP.
     // The parent's own wiring stays (queries there federate across children).
+    // A built workspace lists its children (possibly narrowed by --only-dir); wire those.
     const children = isWorkspaceBuildRoot(repo, program.opts<GlobalOpts>().dir)
-      ? discoverWorkspaceChildren(repo)
+      ? (readWorkspace(repo, program.opts<GlobalOpts>().dir)?.children ?? discoverWorkspaceChildren(repo))
       : [];
     // Parent FIRST: its build is the workspace build, which builds every child's
     // graph, so each child's own `buildGraphIfMissing` then finds one and no-ops.

@@ -41,6 +41,9 @@ export interface WorkspaceBuildOptions {
   followSubmodules?: boolean;
   /** An explicit CLI nested-clone choice to persist into every child repo. */
   followNestedRepos?: boolean;
+  /** `--only-dir` at the workspace root: build only the child repos at or under
+   * these prefixes. Persisted in workspace.json so later builds keep the set. */
+  onlyDirs?: string[];
 }
 
 /** Build every git child into its own committable `graft/`, then replace the
@@ -83,6 +86,7 @@ export async function runWorkspaceBuild(root: string, opts: WorkspaceBuildOption
       if (migrated) console.error(migrationNote(children));
       console.error(`building ${children.length} workspace repos: ${children.join(", ")}`);
     },
+    opts.onlyDirs,
   );
   // Each child self-ignored during its own build; the parent's federation
   // index (graft/workspace.json) is written outside buildGraph, so ignore it here too.
