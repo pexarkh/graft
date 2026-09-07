@@ -61,5 +61,12 @@ export function main(): void {
   const stats = resolveStats(dir);
   const raw = input?.context_window?.used_percentage;
   const ctxPct = typeof raw === 'number' ? Math.round(raw) : null;
-  process.stdout.write(renderStatusline(stats, session, { ctxPct }).join('\n'));
+  const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+  process.stdout.write(renderStatusline(stats, session, {
+    ctxPct,
+    modelId: str(input?.model?.id),
+    modelName: str(input?.model?.display_name),
+    effort: str(input?.effort?.level),
+    cwd: str(input?.cwd) ?? str(input?.workspace?.current_dir) ?? process.cwd(),
+  }).join('\n'));
 }

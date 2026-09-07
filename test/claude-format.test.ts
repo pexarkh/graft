@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { homedir } from 'node:os';
+import { join, sep } from 'node:path';
 import { renderStatusline, incomingEdges, formatBlastRadius, formatRetrieval, formatOrientation, renderSubagent, relevantRetrieval, INJECT_MIN_COVERAGE, NUDGE_CAP } from '../src/claude/format.js';
 import { emptyStats } from '../src/claude/state.js';
 
@@ -32,6 +34,20 @@ test('two-line bar: size + freshness + ctx + last', () => {
   assert.match(lines[0], /⚠ 4 stale/);
   assert.match(lines[1], /ctx 34%/);
   assert.match(lines[1], /last: pkce\.ts/);
+});
+
+test('▸ row carries model, effort and cwd right after the percentage', () => {
+  const stats = { ...emptyStats(), nodeCount: 1, edgeCount: 0, totalCount: 1, lastFile: 'pkce.ts' };
+  const ctx = { ctxPct: 12, modelId: 'claude-fable-5-1', modelName: 'Fable 5.1', effort: 'high', cwd: join(homedir(), 'proj') };
+  const lines = renderStatusline(stats, null, ctx).map(strip);
+  assert.equal(lines[1], `▸ ctx 12% · Fable 5.1 (claude-fable-5-1) · effort high · ~${sep}proj · last: pkce.ts`);
+  // Host state, not graph state: the row shows before the graph is built too (minus last:).
+  const unbuilt = renderStatusline(null, null, ctx).map(strip);
+  assert.match(unbuilt[0], /not built/);
+  assert.equal(unbuilt[1], `▸ ctx 12% · Fable 5.1 (claude-fable-5-1) · effort high · ~${sep}proj`);
+  // Equal name and id collapse to one; a cwd outside $HOME is left alone; absent fields leave no gap.
+  const same = renderStatusline(stats, null, { ctxPct: null, modelId: 'x', modelName: 'x', cwd: '/srv/app' }).map(strip);
+  assert.equal(same[1], '▸ x · /srv/app · last: pkce.ts');
 });
 
 test('syncing overrides stale; synced when clean', () => {
