@@ -390,3 +390,46 @@ test("per-pass env: GRAFT_SYNTH_* overrides only the synth pass, each setting fa
     assert.equal((g as any).modelLabel(), "anthropic:m", "no overrides → the single label as before");
   });
 });
+
+test("usage is metered per model as well as in total", async () => {
+  const { ChatSummarizer } = await import("../src/ai/summarize.js");
+  const { formatUsageByModel, mergeUsageByModel, emptyUsage: empty } = await import("../src/ai/llm/types.js");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    const u = String(url);
+    const body = u.includes("/anthropic/")
+      ? { id: "m", type: "message", role: "assistant", model: "x", content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 50, output_tokens: 5 } }
+      : { choices: [{ message: { content: "ok", tool_calls: [] }, finish_reason: "stop" }], usage: { prompt_tokens: 20, completion_tokens: 2 } };
+    return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    await withEnv(
+      { GRAFT_PROVIDER: "openai", GRAFT_MODEL: "qwen.x", GRAFT_BASE_URL: "https://m/v1", GRAFT_API_KEY: "k", GRAFT_LLM_HEADERS: undefined,
+        GRAFT_SUMMARY_PROVIDER: "anthropic", GRAFT_SUMMARY_MODEL: "sonnet.x", GRAFT_SUMMARY_BASE_URL: "https://m/anthropic", GRAFT_LLM_RETRIES: "0" },
+      () => {
+        const g = new Graft({});
+        const run = async () => {
+          await new ChatSummarizer((g as any).chatModelFor("summary")).summarize("a", { path: "a.ts" }); // anthropic
+          await (g as any).chatModelFor("crux").create({ messages: [{ role: "user", content: "hi" }] }); // openai
+          await (g as any).chatModelFor("crux").create({ messages: [{ role: "user", content: "hi" }] });
+        };
+        return run().then(() => {
+          assert.deepEqual(g.usage, { calls: 3, input: 90, output: 9, cacheRead: 0, cacheCreate: 0 });
+          assert.deepEqual([...g.usageByModel.keys()].sort(), ["anthropic:sonnet.x", "openai:qwen.x"]);
+          assert.deepEqual(g.usageByModel.get("anthropic:sonnet.x"), { calls: 1, input: 50, output: 5, cacheRead: 0, cacheCreate: 0 });
+          assert.deepEqual(g.usageByModel.get("openai:qwen.x"), { calls: 2, input: 40, output: 4, cacheRead: 0, cacheCreate: 0 });
+          const lines = formatUsageByModel(g.usageByModel, "");
+          assert.equal(lines.length, 2);
+          assert.match(lines[0], /^anthropic:sonnet\.x: 1 calls, 50 input tokens/);
+          const merged = new Map([["openai:qwen.x", { ...empty(), calls: 1, input: 1 }]]);
+          mergeUsageByModel(merged, g.usageByModel);
+          assert.equal(merged.get("openai:qwen.x")!.calls, 3);
+          assert.equal(merged.get("openai:qwen.x")!.input, 41);
+          assert.equal(formatUsageByModel(new Map([["only", empty()]])).length, 0, "a single model prints no breakdown");
+        });
+      },
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

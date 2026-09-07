@@ -57,6 +57,8 @@ export class Graft {
   private readonly userConfig: EngineConfig;
   /** Tokens and calls spent through this engine so far (`build --deep` prints it). */
   readonly usage: UsageTotals = emptyUsage();
+  /** The same spend split by model label — what a per-model bill needs. */
+  readonly usageByModel = new Map<string, UsageTotals>();
 
   constructor(config: EngineConfig = {}) {
     this.userConfig = config;
@@ -126,7 +128,7 @@ export class Graft {
   /** The shared transport, or a clear error telling the user how to set a key. */
   private chatModel(): ChatModel {
     if (this._chatModel) return this._chatModel;
-    this._chatModel = this.cfg.chatModel ? meter(this.cfg.chatModel, this.usage) : this.buildModel(this.cfg);
+    this._chatModel = this.cfg.chatModel ? this.metered(this.cfg.chatModel) : this.buildModel(this.cfg);
     return this._chatModel;
   }
 
@@ -151,10 +153,16 @@ export class Graft {
           "for your provider) to build or summarize the graph.",
       );
     }
-    return meter(
+    return this.metered(
       createChatModel({ provider: cfg.provider, apiKey: cfg.apiKey, model: cfg.model, baseUrl: cfg.baseUrl, headers: cfg.headers }),
-      this.usage,
     );
+  }
+
+  /** Every call lands in the grand total and in its model's own bucket. */
+  private metered(model: ChatModel): ChatModel {
+    const own = this.usageByModel.get(model.label) ?? emptyUsage();
+    this.usageByModel.set(model.label, own);
+    return meter(meter(model, own), this.usage);
   }
 
   private synthesizer(): Synthesizer {

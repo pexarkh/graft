@@ -164,7 +164,23 @@ export function meter(model: ChatModel, totals: UsageTotals): ChatModel {
 
 /** One line for the end of a `--deep` build, e.g.
  * `llm usage: 531 calls, 1,984,443 input tokens (+12,000 cache read, 0 cache write), 410,915 output tokens`. */
-export function formatUsage(t: UsageTotals): string {
+export function formatUsage(t: UsageTotals, label = "llm usage"): string {
   const n = (x: number) => x.toLocaleString("en-US");
-  return `llm usage: ${n(t.calls)} calls, ${n(t.input)} input tokens (+${n(t.cacheRead)} cache read, ${n(t.cacheCreate)} cache write), ${n(t.output)} output tokens`;
+  return `${label}: ${n(t.calls)} calls, ${n(t.input)} input tokens (+${n(t.cacheRead)} cache read, ${n(t.cacheCreate)} cache write), ${n(t.output)} output tokens`;
+}
+
+/** The per-model breakdown under the total — one indented line per model, only
+ * when more than one model was used (a single model IS the total). */
+export function formatUsageByModel(byModel: ReadonlyMap<string, UsageTotals>, indent = "    "): string[] {
+  if (byModel.size < 2) return [];
+  return [...byModel.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([label, t]) => `${indent}${formatUsage(t, label)}`);
+}
+
+/** Fold `from`'s per-model totals into `into` (workspace builds sum their children). */
+export function mergeUsageByModel(into: Map<string, UsageTotals>, from: ReadonlyMap<string, UsageTotals>): void {
+  for (const [label, t] of from) {
+    const acc = into.get(label) ?? emptyUsage();
+    addUsage(acc, t, t.calls);
+    into.set(label, acc);
+  }
 }

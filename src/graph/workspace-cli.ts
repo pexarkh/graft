@@ -9,7 +9,7 @@ import { Graft } from "../engine.js";
 import { contextDirFor, ensureGitignored } from "../context/node-file.js";
 import { patchBuildConfig, type BuildConfig } from "../util/state.js";
 import type { EngineConfig } from "../ai/providers.js";
-import { addUsage, emptyUsage, formatUsage } from "../ai/llm/types.js";
+import { addUsage, emptyUsage, formatUsage, formatUsageByModel, mergeUsageByModel, type UsageTotals } from "../ai/llm/types.js";
 import { formatAsk } from "../ask/ask.js";
 import type { Direction } from "./traverse.js";
 import {
@@ -51,6 +51,7 @@ export interface WorkspaceBuildOptions {
  * first when migrating away from a mega-graph. */
 export async function runWorkspaceBuild(root: string, opts: WorkspaceBuildOptions): Promise<void> {
   const usage = emptyUsage();
+  const usageByModel = new Map<string, UsageTotals>();
   const buildChild = async (childDir: string, childName: string): Promise<void> => {
     // Persisted BEFORE the child build itself runs, same as the single-repo
     // path in cli.ts, so this build and every later no-flag child build agree.
@@ -73,7 +74,9 @@ export async function runWorkspaceBuild(root: string, opts: WorkspaceBuildOption
     console.log(`✓ ${childName}/: ${g.nodes} nodes, ${g.edges} edges, ${g.cards} cards [${g.languages.join(", ")}]`);
     if (opts.deep) {
       console.log(`  ${formatUsage(engine.usage)}`);
+      for (const line of formatUsageByModel(engine.usageByModel)) console.log(line);
       addUsage(usage, engine.usage, engine.usage.calls);
+      mergeUsageByModel(usageByModel, engine.usageByModel);
     }
     for (const e of g.errors) console.error(`✗ ${childName}/: ${e}`);
   };
@@ -92,7 +95,10 @@ export async function runWorkspaceBuild(root: string, opts: WorkspaceBuildOption
   // index (graft/workspace.json) is written outside buildGraph, so ignore it here too.
   ensureGitignored(root, contextDirFor(root, opts.override));
   console.log(`✓ workspace: ${children.length} repos federated → graft/workspace.json`);
-  if (opts.deep) console.log(`  ${formatUsage(usage)} across all repos`);
+  if (opts.deep) {
+    console.log(`  ${formatUsage(usage)} across all repos`);
+    for (const line of formatUsageByModel(usageByModel)) console.log(line);
+  }
   console.log(`  graft/ is git-ignored — each teammate runs \`graft build\` to regenerate it locally.`);
 }
 
