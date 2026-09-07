@@ -534,6 +534,9 @@ program
       const m = g.meaning;
       console.log(`  meaning: ${m.computed} computed, ${m.cached} cached, ${m.stale} stale, ${m.pending} pending`);
       console.log(`  ${formatUsage(engine.usage)}`);
+      const labels = engine.passLabels();
+      if (new Set(Object.values(labels)).size > 1)
+        console.log(`  models: summary=${labels.summary}, synth=${labels.synth}, crux=${labels.crux}`);
     }
     console.log(`  → ${g.contextDir}`);
     // The activation event. Everything here is a bucket or a fixed label: repo
