@@ -10,7 +10,7 @@
  * the sync. This class wires the configured LLM provider into the build/check
  * pipelines; an API key is required for any LLM-backed operation.
  */
-import { resolveConfig, type EngineConfig, type ResolvedConfig } from "./ai/providers.js";
+import { hasPassOverrides, LLM_PASSES, resolveConfig, type EngineConfig, type LlmPass, type ResolvedConfig } from "./ai/providers.js";
 import { ChatSynthesizer, type Synthesizer } from "./ai/synthesize.js";
 import { ChatSummarizer, type Summarizer } from "./ai/summarize.js";
 import { ChatCruxSummarizer, type CruxSummarizer } from "./ai/crux.js";
@@ -54,10 +54,12 @@ export interface GraphRunOptions {
 
 export class Graft {
   private cfg: ResolvedConfig;
+  private readonly userConfig: EngineConfig;
   /** Tokens and calls spent through this engine so far (`build --deep` prints it). */
   readonly usage: UsageTotals = emptyUsage();
 
   constructor(config: EngineConfig = {}) {
+    this.userConfig = config;
     this.cfg = resolveConfig(config);
   }
 
@@ -119,47 +121,73 @@ export class Graft {
   }
 
   private _chatModel?: ChatModel;
+  private readonly _passModels = new Map<LlmPass, ChatModel>();
 
-  /** The configured transport, or a clear error telling the user how to set a key. */
+  /** The shared transport, or a clear error telling the user how to set a key. */
   private chatModel(): ChatModel {
     if (this._chatModel) return this._chatModel;
-    let model = this.cfg.chatModel;
-    if (!model) {
-      if (!this.cfg.apiKey) {
-        throw new Error(
-          "No API key. Set GRAFT_API_KEY (and GRAFT_PROVIDER / GRAFT_BASE_URL / GRAFT_MODEL " +
-            "for your provider) to build or summarize the graph.",
-        );
-      }
-      model = createChatModel({
-        provider: this.cfg.provider,
-        apiKey: this.cfg.apiKey,
-        model: this.cfg.model,
-        baseUrl: this.cfg.baseUrl,
-        headers: this.cfg.headers,
-      });
-    }
-    this._chatModel = meter(model, this.usage);
+    this._chatModel = this.cfg.chatModel ? meter(this.cfg.chatModel, this.usage) : this.buildModel(this.cfg);
     return this._chatModel;
   }
 
+  /** The transport for one pass: the shared model unless a `GRAFT_<PASS>_*` variable
+   * singles this pass out, in which case its own resolved config builds a second
+   * client. Every model meters into the same `usage` total. An injected `chatModel`
+   * always wins — a programmatic caller has chosen the transport for everything. */
+  private chatModelFor(pass: LlmPass): ChatModel {
+    if (this.cfg.chatModel || !hasPassOverrides(pass)) return this.chatModel();
+    let m = this._passModels.get(pass);
+    if (!m) {
+      m = this.buildModel(resolveConfig(this.userConfig, pass));
+      this._passModels.set(pass, m);
+    }
+    return m;
+  }
+
+  private buildModel(cfg: ResolvedConfig): ChatModel {
+    if (!cfg.apiKey) {
+      throw new Error(
+        "No API key. Set GRAFT_API_KEY (and GRAFT_PROVIDER / GRAFT_BASE_URL / GRAFT_MODEL " +
+          "for your provider) to build or summarize the graph.",
+      );
+    }
+    return meter(
+      createChatModel({ provider: cfg.provider, apiKey: cfg.apiKey, model: cfg.model, baseUrl: cfg.baseUrl, headers: cfg.headers }),
+      this.usage,
+    );
+  }
+
   private synthesizer(): Synthesizer {
-    return this.cfg.synthesizer ?? new ChatSynthesizer(this.chatModel());
+    return this.cfg.synthesizer ?? new ChatSynthesizer(this.chatModelFor("synth"));
   }
 
   /** Per-node crux summarizer for the code graph's Tier-2 pass. */
   private cruxSummarizer(): CruxSummarizer {
-    return this.cfg.cruxSummarizer ?? new ChatCruxSummarizer(this.chatModel());
+    return this.cfg.cruxSummarizer ?? new ChatCruxSummarizer(this.chatModelFor("crux"));
   }
 
   private summarizer(): Summarizer {
-    return this.cfg.summarizer ?? new ChatSummarizer(this.chatModel());
+    return this.cfg.summarizer ?? new ChatSummarizer(this.chatModelFor("summary"));
   }
 
-  /** Human label for the active model, recorded in the manifest. */
+  /** `provider:model` per pass — identical labels collapse to one. */
+  passLabels(): Record<LlmPass, string> {
+    const out = {} as Record<LlmPass, string>;
+    for (const pass of LLM_PASSES) {
+      const cfg = this.cfg.chatModel || !hasPassOverrides(pass) ? this.cfg : resolveConfig(this.userConfig, pass);
+      out[pass] = this.cfg.chatModel ? this.cfg.chatModel.label : `${cfg.provider}:${cfg.model}`;
+    }
+    return out;
+  }
+
+  /** Human label for the active model(s), recorded in the manifest: one label when
+   * every pass shares a model, else `summary=…; synth=…; crux=…`. */
   private modelLabel(): string {
     if (this.cfg.chatModel) return this.cfg.chatModel.label;
     if (this.cfg.synthesizer || this.cfg.summarizer || this.cfg.cruxSummarizer) return "custom";
-    return `${this.cfg.provider}:${this.cfg.model}`;
+    const labels = this.passLabels();
+    const distinct = new Set(Object.values(labels));
+    if (distinct.size === 1) return labels.summary;
+    return LLM_PASSES.map((p) => `${p}=${labels[p]}`).join("; ");
   }
 }
