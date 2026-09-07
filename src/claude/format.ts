@@ -1,4 +1,5 @@
-import { basename } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, sep } from 'node:path';
 import type { Stats, SessionState } from './state.js';
 import type { GraphV1, EdgeV1 } from '../graph/types.js';
 // The injection gate reuses the federation floors rather than inventing its own:
@@ -22,13 +23,49 @@ export function freshnessSegment(s: Stats): string {
   return C.indigo('✓ synced');
 }
 
+/** Host state for the `▸` row. Everything but `ctxPct` comes straight from the
+ * statusline stdin JSON (`model.id`, `model.display_name`, `effort.level`, `cwd`). */
+export interface StatuslineContext {
+  ctxPct: number | null;
+  modelId?: string;
+  modelName?: string;
+  effort?: string;
+  cwd?: string;
+}
+
+/** `Fable 5.1 (claude-fable-5-1)`; one half alone when the other is missing or identical. */
+function modelSegment(ctx: StatuslineContext): string | null {
+  const name = ctx.modelName?.trim();
+  const id = ctx.modelId?.trim();
+  if (name && id && name !== id) return C.text(name) + C.muted(` (${id})`);
+  const one = name || id;
+  return one ? C.text(one) : null;
+}
+
+/** `$HOME` shortened to `~`, the way a shell prompt does it. */
+export function tildify(p: string): string {
+  const home = homedir();
+  if (home && (p === home || p.startsWith(home + sep))) return `~${p.slice(home.length)}`;
+  return p;
+}
+
 export function renderStatusline(
   stats: Stats | null,
   session: SessionState | null,
-  ctx: { ctxPct: number | null },
+  ctx: StatuslineContext,
 ): string[] {
+  // The ▸ row is host state (context, model, effort, cwd), not graph state, so it
+  // renders whether or not the graph is built; only `last:` needs a graph.
+  const bottom: string[] = [];
+  if (typeof ctx.ctxPct === 'number') bottom.push(C.text(`ctx ${ctx.ctxPct}%`));
+  const model = modelSegment(ctx);
+  if (model) bottom.push(model);
+  if (ctx.effort) bottom.push(C.muted('effort ') + C.text(ctx.effort));
+  if (ctx.cwd) bottom.push(C.muted(tildify(ctx.cwd)));
+  if (stats?.lastFile) bottom.push(C.muted('last: ') + C.text(basename(stats.lastFile)));
+  const bottomLine = bottom.length ? [C.muted('▸ ') + bottom.join(SEP)] : [];
   if (!stats) {
-    return [C.muted('◤ graft · not built · run ') + C.text('graft build')];
+    return [C.muted('◤ graft · not built · run ') + C.text('graft build'), ...bottomLine];
   }
   const top = [C.muted('◤ ') + C.indigo('graft'), C.text(`${stats.nodeCount} nodes / ${stats.edgeCount} edges`)];
   top.push(freshnessSegment(stats));
@@ -42,13 +79,7 @@ export function renderStatusline(
     top.push(C.indigo(`~${saved.toLocaleString()} tok saved${money}`));
   }
 
-  const bottom: string[] = [];
-  if (typeof ctx.ctxPct === 'number') bottom.push(C.text(`ctx ${ctx.ctxPct}%`));
-  if (stats.lastFile) bottom.push(C.muted('last: ') + C.text(basename(stats.lastFile)));
-
-  const lines = [top.join(SEP)];
-  if (bottom.length) lines.push(C.muted('▸ ') + bottom.join(SEP));
-  return lines;
+  return [top.join(SEP), ...bottomLine];
 }
 
 function nodeIdsInFile(w: GraphV1, filePath: string): Set<string> {
