@@ -89,3 +89,9 @@ test('no candidate at all exits quietly — a hook must never fail the session',
   mkdirSync(join(root, 'project'), { recursive: true });
   assert.equal(runShim(root, join(root, 'nowhere'), join(root, 'project')), null);
 });
+
+test('a repo-relative baked path resolves against the project dir (graft wiring its own checkout)', () => {
+  const root = tmpRepo('shim-relative');
+  fakeInstall(root, 'project', NEWER); // <project>/dist/claude — the shape of graft's own repo
+  assert.equal(runShim(root, join('dist', 'claude'), join(root, 'project')), NEWER);
+});
