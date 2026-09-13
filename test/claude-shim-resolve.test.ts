@@ -137,3 +137,9 @@ test('the exec-dir probe reads the fixture prefix, not the machine install', () 
   fakeInstall(join(root, 'project', 'node_modules', '@nanonets'), 'graft', '0.9.1');
   assert.equal(runShim(root, join(root, 'nowhere'), join(root, 'project')), '99.0.0');
 });
+
+test('a repo-relative baked path resolves against the project dir (graft wiring its own checkout)', () => {
+  const root = tmpRepo('shim-relative');
+  fakeInstall(root, 'project', NEWER); // <project>/dist/claude — the shape of graft's own repo
+  assert.equal(runShim(root, join('dist', 'claude'), join(root, 'project')), NEWER);
+});
