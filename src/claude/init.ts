@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync, readFileSync, chmodSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, relative, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { installClaudeGlobal, type GlobalWrite } from '../hosts/claude-global.js';
@@ -77,7 +77,10 @@ export function runInit(
 
   const sl = statusline;
   const hk = hooks;
-  const bakedDir = claudeDistDir(); // absolute <pkg>/dist/claude — the shims' primary resolution path
+  // <pkg>/dist/claude — the shims' primary resolution path. Repo-relative when graft runs from
+  // this very checkout (its own repo), so the committed shim carries no machine-specific path.
+  const rel = relative(dir, claudeDistDir());
+  const bakedDir = rel.startsWith('..') || isAbsolute(rel) ? claudeDistDir() : rel;
   writeFileSync(sl, statuslineShim(bakedDir)); chmodSync(sl, 0o755);
   writeFileSync(hk, hooksShim(bakedDir)); chmodSync(hk, 0o755);
 

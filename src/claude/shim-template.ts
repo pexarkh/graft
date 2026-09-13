@@ -3,7 +3,9 @@
 // call into it — so the real logic lives in the package and upgrades with it.
 //
 // Candidates, cheapest first (no subprocess for 1–3):
-//   1. `bakedDir`   — the absolute `dist/claude` graft was running from at init time.
+//   1. `bakedDir`   — the `dist/claude` graft was running from at init time. Absolute, or
+//                     repo-relative when it sits inside the repo (graft wiring its own
+//                     checkout), so the committed shim carries no machine-specific path.
 //                     Correct with zero guesswork for whoever ran `graft init`.
 //   2. repo node_modules — a local dev-dep install.
 //   3. `execDir/../lib`  — the cheap legacy guess (covers nvm / classic prefix layout).
@@ -25,7 +27,7 @@ const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { execFileSync } = require('child_process');
 const dir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-const BAKED = ${JSON.stringify(bakedDir)};
+const BAKED = path.resolve(dir, ${JSON.stringify(bakedDir)});
 
 // The dist/claude dir of @nanonets/graft resolved from a base whose node_modules is searched.
 function fromPkg(base) {
