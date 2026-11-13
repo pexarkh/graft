@@ -41,8 +41,8 @@ range before finalizing. Only open source files when a node genuinely lacks a
 needed detail, and then at the exact file:line the node points to — never
 re-read whole files.
 
-After big code changes, refresh the graph with \`graft build\` (deterministic,
-no API key, $0).`;
+The graph refreshes itself before every query, so results already reflect
+uncommitted edits. You do not need to run \`graft build\` after editing.`;
 }
 
 export function cursorRule(): string {
